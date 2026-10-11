@@ -1,0 +1,10 @@
+dist/
+coverage/
+package-lock.json
+# Prettier does not support indented Sass.
+**/*.sass
+# Imported chess artwork and protected workspace metadata.
+src/assets/pieces/
+.agents/
+.codex/
+.aws/

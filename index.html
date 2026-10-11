@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="user-scalable=no, width=device-width, initial-scale=1, maximum-scale=1"
+    />
+    <meta name="theme-color" content="#FFFFFF" />
+    <meta
+      name="description"
+      content="Play chess locally or challenge an online opponent, chat, and save or replay your games."
+    />
+    <title>Chess</title>
+
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+    <script type="module" src="/src/main.js" defer></script>
+  </head>
+
+  <body>
+    <nav class="sidenav">
+      <a href="javascript:void(0)" class="closebtn">&times;</a>
+      <label id="new_game">New Game</label>
+      <label id="leave_game">Leave The Game</label>
+      <label id="save">Save</label>
+      <label for="jsonfile" id="load">Load</label>
+      <label id="playGame">Play the Game</label>
+      <input hidden id="jsonfile" type="file" />
+      <a href="https://en.wikipedia.org/wiki/Rules_of_chess" target="_blank"
+        >Game Rules</a
+      >
+      <a href="https://picinfiniti.net/" target="_blank">About</a>
+    </nav>
+    <container>
+      <arena>
+        <div class="top"></div>
+        <div class="middle">
+          <div class="left"></div>
+          <div id="fake"></div>
+          <div id="board"></div>
+          <div class="right"></div>
+          <div id="result">
+            <label type="text" id="r-0" name="0">Check Mate!!! </label>
+            <label id="r-1" type="text" name="♔">♔</label>
+            <label type="text" id="r-2">
+              <span>Black</span>&nbsp;Wins...
+            </label>
+          </div>
+        </div>
+        <div class="bottom"></div>
+      </arena>
+
+      <info>
+        <div id="status">
+          <div id="PHASE">
+            <span>Chess</span>
+            <setting style="cursor: pointer"> ⚙ </setting>
+            <play>
+              <span class="undo" style="cursor: pointer"> ❬ </span>
+              <span class="play" style="cursor: pointer"> 📽 </span>
+              <span class="redo" style="cursor: pointer"> ❭ </span>
+            </play>
+          </div>
+          <div class="status">
+            <label id="PB" type="text" name="♔">♔</label>
+            <button id="Resign" type="button">Resign</button>
+            <label id="PW" type="text" name="♔">♔</label>
+          </div>
+        </div>
+        <div class="online">
+          <peers>
+            <h4>Online</h4>
+            <peer></peer>
+          </peers>
+        </div>
+
+        <div class="chat-box">
+          <div class="chat-messages" contenteditable="false" id="message-box">
+            <div class="form">
+              <h3 class="title">What's your nickname?</h3>
+              <input class="usernameInput" type="text" maxlength="8" />
+            </div>
+            <ul dcr="message"></ul>
+          </div>
+          <div class="chat-input-container">
+            <unicode-emoji-picker
+              version="15.0"
+              default-group="search"
+              filters-position="left"
+            ></unicode-emoji-picker>
+            <button class="emoji-button">😀</button>
+            <input
+              type="text"
+              class="chat-input"
+              id="message-input"
+              placeholder="Type your message"
+            />
+
+            <button class="chat-send">Send</button>
+          </div>
+        </div>
+      </info>
+    </container>
+
+    <capture></capture>
+    <footer>
+      <div>
+        <p>
+          .Powered by
+          <a href="http://picinfiniti.net/" target="blank">PicInfiniti.</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
