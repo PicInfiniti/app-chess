@@ -25,6 +25,7 @@ dist
 dist-ssr
 *.local
 coverage
+.wrangler/
 .env
 .env.*
 !.env.example

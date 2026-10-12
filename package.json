@@ -12,8 +12,11 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "node --test tests/*.test.js",
-    "check": "npm run lint && npm run format:check && npm test && npm run build",
-    "deploy": "node scripts/deploy.mjs"
+    "check": "npm run lint && npm run format:check && npm test && npm run build && npm run lobby:check",
+    "deploy": "node scripts/deploy.mjs",
+    "lobby:dev": "wrangler dev --port 8787",
+    "lobby:deploy": "wrangler deploy",
+    "lobby:check": "wrangler deploy --dry-run --outdir /tmp/chess-lobby-build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -21,7 +24,8 @@
     "globals": "^17.13.0",
     "prettier": "^3.9.10",
     "sass": "^1.105.1",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "wrangler": "^4.149.0"
   },
   "dependencies": {
     "chance": "^1.1.11",

@@ -9,7 +9,7 @@ A browser chess app built with vanilla JavaScript and Sass. Play together on one
 ## Features
 
 - **Local play** — take turns on the same board.
-- **Online opponents** — send play requests to available players and connect through PeerJS.
+- **Online opponents** — send play requests to available players and connect through PeerJS. A Cloudflare lobby lists players and pairs people waiting for an opponent.
 - **Click or drag** — select a piece to see possible moves, then click a destination or drag it into place.
 - **Game history** — undo and redo moves, replay a game, or save and load a JSON history.
 - **Built-in chat** — choose a nickname and send messages and emoji.
@@ -32,28 +32,28 @@ If you do not use nvm, install a supported Node.js version and skip `nvm use`. O
 ### Your first game
 
 1. Choose a nickname in the chat panel and press **Enter**.
-2. Play locally by taking turns, or select an available player in **Online** to send a game request.
+2. Play locally by taking turns, select an available player in **Online** to send a game request, or click **Find opponent** to be paired with another waiting player.
 3. Click a piece and its destination, or drag the piece to move it.
 4. Open the **⚙** menu to start a new game, save your history, or load a saved game.
 
 The arrows above the board step backward and forward through moves; the middle playback control replays the history. **Save** downloads `history.json`, which you can import through **Load**.
 
-Local play does not require the matchmaking backend. Online discovery requires the matchmaking service, and online connections require PeerJS signaling.
+Local play does not require a backend. Online discovery and automatic pairing use the Cloudflare lobby; game moves and chat use PeerJS/WebRTC. Online play still depends on PeerJS signaling and may require TURN on restrictive networks.
 
 ## Development
 
-| Command                | Purpose                                               |
-| ---------------------- | ----------------------------------------------------- |
-| `npm run dev`          | Start the development server                          |
-| `npm run build`        | Create the production build in `dist/`                |
-| `npm run preview`      | Preview the production build locally                  |
-| `npm run lint`         | Check JavaScript with ESLint                          |
-| `npm run lint:fix`     | Apply automatic lint fixes                            |
-| `npm run format`       | Format supported files with Prettier                  |
-| `npm run format:check` | Check formatting                                      |
-| `npm test`             | Run deployment integration tests                      |
-| `npm run check`        | Run lint, formatting, tests, and build                |
-| `npm run deploy`       | Validate, build, and publish to the deployment branch |
+| Command                | Purpose                                                    |
+| ---------------------- | ---------------------------------------------------------- |
+| `npm run dev`          | Start the development server                               |
+| `npm run build`        | Create the production build in `dist/`                     |
+| `npm run preview`      | Preview the production build locally                       |
+| `npm run lint`         | Check JavaScript with ESLint                               |
+| `npm run lint:fix`     | Apply automatic lint fixes                                 |
+| `npm run format`       | Format supported files with Prettier                       |
+| `npm run format:check` | Check formatting                                           |
+| `npm test`             | Run lobby, peer-session, board-reset, and deployment tests |
+| `npm run check`        | Run lint, formatting, tests, build, and Worker validation  |
+| `npm run deploy`       | Validate, build, and publish to the deployment branch      |
 
 Run `npm run check` before submitting changes. GitHub Actions runs the same checks on pushes and pull requests. Indented `.sass` files are excluded from Prettier; `.editorconfig` supplies their whitespace conventions.
 
@@ -77,8 +77,9 @@ src/
     fonts/                 Local chess font
 scripts/                   Node/Git deployment utility
 tests/                    Deployment integration tests
-server.py                  Optional Flask matchmaking service
-utils.py                   Backend peer activity helpers
+backend/                   Cloudflare lobby Worker and presence/pairing logic
+wrangler.jsonc             Lobby deployment and allowed frontend origins
+server.py / utils.py       Legacy Flask backend (unused by the frontend)
 vite.config.js             Build inputs, base path, and @ alias
 ```
 
@@ -92,27 +93,42 @@ Defaults work without an environment file. To customize them:
 cp .env.example .env
 ```
 
-| Variable          | Default                            | Purpose                          |
-| ----------------- | ---------------------------------- | -------------------------------- |
-| `BASE_PATH`       | `/`                                | Public URL prefix for the app    |
-| `VITE_SERVER_URL` | `https://gungi.pythonanywhere.com` | Matchmaking service URL          |
-| `DEPLOY_REMOTE`   | `origin`                           | Git remote used for deployment   |
-| `DEPLOY_BRANCH`   | `gh-pages`                         | Branch used to publish the build |
+| Variable         | Default                                                   | Purpose                          |
+| ---------------- | --------------------------------------------------------- | -------------------------------- |
+| `BASE_PATH`      | `/`                                                       | Public URL prefix for the app    |
+| `VITE_LOBBY_URL` | Local dev: `ws://localhost:8787/lobby`; production: unset | Cloudflare lobby WebSocket URL   |
+| `DEPLOY_REMOTE`  | `origin`                                                  | Git remote used for deployment   |
+| `DEPLOY_BRANCH`  | `gh-pages`                                                | Branch used to publish the build |
 
 Restart the development server after changing environment files. Browser-facing `VITE_*` values are public and embedded at build time.
 
-### Optional local matchmaking service
+### Cloudflare matchmaking lobby
 
-The Python backend tracks available peers; PeerJS handles the peer connection separately. To run the backend in an isolated environment:
+The lobby replaces Flask. It keeps a live list of players, marks pending/active opponents as busy, and pairs two players who choose **Find opponent**. Games and chat travel over PeerJS, not through the lobby. The public lobby is capped at 100 connected players for this initial version.
+
+Run the backend and frontend in separate terminals:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install Flask Flask-Cors
-python server.py
+npm run lobby:dev
+npm run dev
 ```
 
-Set `VITE_SERVER_URL=http://127.0.0.1:5000` in `.env`, then restart Vite. The backend runs separately from the frontend and is not included in `dist/`.
+Open the frontend in two different browser profiles (or a regular and private window), choose a nickname in each, and click **Find opponent** in both. Alternatively, click a player in the Online list and accept the request on the other browser. Use **Leave The Game** to return to the lobby. Pending connections time out after 20 seconds; stale lobby clients are removed after 90 seconds. A lobby outage does not disconnect an established PeerJS game. Search is canceled on lobby disconnect; it is not automatically resumed.
+
+To publish the lobby:
+
+1. Create/sign in to your Cloudflare account using `npx wrangler login`. SQLite-backed Durable Objects work on the Workers Free plan.
+2. Set `ALLOWED_ORIGINS` in `wrangler.jsonc` to your frontend's exact origin (scheme + hostname + optional port, without a path or trailing slash). Remove local development origins when deploying publicly. Keep the `new_sqlite_classes` migration.
+3. Run `npm run lobby:check` to validate the Worker, then `npm run lobby:deploy`.
+4. Copy the printed Worker URL into `.env.production`, adding the `/lobby` path:
+
+   ```dotenv
+   VITE_LOBBY_URL=wss://chess-lobby.YOUR-SUBDOMAIN.workers.dev/lobby
+   ```
+
+5. Build and publish the frontend with `npm run deploy` (or upload `dist/` to your host).
+
+The Worker exposes `/health` for an HTTP health check. It uses WebSocket hibernation and serializes presence in socket attachments; no database or Python server is needed. Connection capacity, message size limits, action throttling, and an origin allowlist are basic safeguards for a hobby lobby, not authenticated player identities or comprehensive abuse protection. Moves are still validated by browsers; this is not a server-authoritative or ranked chess service. Existing promotion/history and chess-rule limitations still need separate work before competitive play.
 
 ## Deployment
 

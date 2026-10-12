@@ -292,6 +292,26 @@ info
     text-align: left
     width: 100%
     height: 300px
+    overflow-y: auto
+
+    #lobby-status
+      font-size: 13pt
+      margin: 8px 0
+
+    #find-opponent, li button
+      font: inherit
+      font-size: 14pt
+      border: 1px solid #9b6224
+      border-radius: 6px
+      background: #fff8e6
+      padding: 6px 10px
+      cursor: pointer
+      &:disabled
+        opacity: .55
+        cursor: default
+
+    li button
+      margin-bottom: 4px
 
     peers
       h4

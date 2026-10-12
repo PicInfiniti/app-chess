@@ -1,337 +1,262 @@
 import $ from 'jquery';
-console.log('api');
 import { Peer } from 'peerjs';
-
+import { LobbyClient } from './lobby.js';
+import { PeerSession } from './peer-session.js';
 import {
   Update_Game,
   Reset_Game,
   load_history,
   CheckMate,
   Select_Square,
+  addMessage,
 } from './ui/utils.js';
 import { chess } from './ui/setup.js';
 
-import { addMessage } from './ui/utils.js';
-
-import Chance from 'chance';
-var chance = new Chance();
-
-// const serverUrl = "http://127.0.0.1:5000";
-const serverUrl =
-  import.meta.env.VITE_SERVER_URL || 'https://gungi.pythonanywhere.com';
-export var socket = {};
-
-socket = {
-  peer: null, // your peer
+export const socket = {
+  peer: null,
   opponent: null,
-  color: null, // your color in case have opponent
+  color: null,
   username: '',
-  set_username: false, // custom username used or not
-  admin: true, // I don't where should I use it
-  error: 0, // To stop printing same error multi time
-  data: null, // keep last data received
-  get_accepted: false, // play request accept or not
-  history: [], // used to loading game
-  click: true, // to allow clicking or not
-  end_game: false, // keep if the game ends or not,
-  click_pos: {
-    // keep track of click positions
-    src: null,
-    dst: null,
-  },
+  set_username: false,
+  get_accepted: false,
+  history: [],
+  click: true,
+  end_game: false,
+  click_pos: { src: null, dst: null },
   playback: false,
+  peers: {},
 };
-
 document.socket = socket;
 document.Reset_Game = Reset_Game;
+let queued = false;
+let lobbyConnected = false;
+const lobbyUrl =
+  import.meta.env.VITE_LOBBY_URL ||
+  (import.meta.env.DEV ? 'ws://localhost:8787/lobby' : '');
+const lobby = new LobbyClient(lobbyUrl, {
+  onPlayers(peers) {
+    socket.peers = Object.fromEntries(peers.map((peer) => [peer.id, peer]));
+    queued = peers.find((peer) => peer.id === socket.peer.id)?.queued || false;
+    if (!queued && lobbyConnected && !session.connection && !session.expected)
+      $('#lobby-status').text('Connected');
+    renderPlayers();
+    updateFindButton();
+  },
+  onStatus(status) {
+    lobbyConnected = status === 'Connected';
+    if (!lobbyConnected) queued = false;
+    $('#lobby-status').text(status);
+    updateFindButton();
+  },
+  onError(text) {
+    addMessage(text, 'Admin', { color: 'red' });
+  },
+  onMatch(match) {
+    queued = false;
+    if (!session.expect(match)) lobby.setBusy(Boolean(socket.opponent));
+    $('#lobby-status').text(`Connecting to ${match.opponent.username}…`);
+    updateFindButton();
+  },
+});
 
 socket.peer = new Peer();
-socket.peer.on('open', function (id) {
-  addMessage(`You are Online`, 'Admin');
-  socket.error = 0;
-
-  $('peers h4').css({
-    color: 'green',
-  });
-  socket.username = id.slice(0, 8); // set default username
-
-  sendHeartbeat(id); // send first heartbeat
-  setInterval(() => {
-    // send heartbeat every 5 seconds
-    sendHeartbeat(id);
-  }, 5000); // 5 seconds
-});
-
-socket.peer.on('connection', function (conn) {
-  conn.on('data', function (data) {
-    if (data.message == 'hi') {
-      socket.data = data;
-      addRequest(data.username);
-    } else if (data.message == 'move') {
-      let piece = chess.get(data.move.piece.src);
-      let res = Update_Game(
-        {
-          piece: piece,
-          dst: data.move.dst,
-          type: data.move.type,
-        },
-        true,
-      );
-
-      if (res) {
-        Select_Square(`#b-${data.move.dst}`, 'green');
-      }
-    } else if (data.message == 'message') {
-      addMessage(data.text, data.username);
-    } else if (data.message == 'close') {
-      addMessage(`${socket.opponent.username} Leave the game.`, 'Admin');
-    } else if (data.message == 'rejected') {
-      socket.opponent = null;
-      socket.get_accepted = false;
-
-      addMessage('Maybe another time...', data.username);
-    } else if (data.message == 'accepted') {
-      addMessage("Let's Play", data.username);
-
-      socket.get_accepted = true;
-
-      Reset_Game();
-    } else if (data.message == 'load_history') {
-      socket.history = data.history;
-      addHistory(data.username);
-    } else if (data.message == 'deny_history') {
-      addMessage('I want to start fresh...', data.username);
-    } else if (data.message == 'accept_history') {
-      addMessage(`${data.username} Loads a Game...`, 'Admin');
-      load_history(socket.history);
-    } else if (data.message == 'checkmate') {
-      CheckMate(chess.in_check().b ? 'w' : 'b');
-    } else if (data.message == 'resign') {
-      CheckMate(data.color == 'w' ? 'b' : 'w', 'Resign');
-    } else if (data.message == 'leave') {
-      addMessage(`${data.username} Leaves The Game.`, 'Admin');
-      socket.opponent = null;
-    } else {
-      console.log(data);
-    }
-  });
-});
-
-socket.peer.on('error', function () {
-  if (socket.error === 0) {
-    addMessage(`Some Error occurred`, 'Admin', {
-      color: 'red',
+const session = new PeerSession(socket.peer, {
+  getUsername: () => (socket.set_username ? socket.username : ''),
+  onState(conn, accepted, color) {
+    socket.opponent = conn;
+    socket.get_accepted = accepted;
+    socket.color = color;
+    queued = false;
+    const busy = Boolean(conn || session.expected);
+    lobby.setBusy(busy);
+    if (accepted) $('#lobby-status').text(`Playing ${conn.username}`);
+    else if (!busy && lobbyConnected) $('#lobby-status').text('Connected');
+    if (!conn || accepted) $('[dcr=request]').remove();
+    $('.play').css({
+      color: busy ? 'red' : '',
+      cursor: busy ? 'not-allowed' : 'pointer',
     });
-  }
-});
-
-socket.peer.on('disconnected', function () {
-  if (socket.error === 0) {
-    addMessage(`You are disconnected.`, 'Admin', {
-      color: 'red',
-    });
-    socket.peer.reconnect();
-    addMessage(`Reconnecting...`, 'Admin', {
-      color: 'red',
-    });
-    $('peers h4').css({
-      color: 'red',
-    });
-    socket.error = 1;
-  }
-});
-
-socket.peer.on('close', function () {
-  if (socket.opponent != null) {
-    socket.opponent.send({
-      username: socket.username,
-      id: socket.peer._id,
-      message: 'close',
-      color: socket.color,
-    });
-  }
-});
-
-function sendHeartbeat(peerId) {
-  // heartbeat function
-  $.ajax({
-    type: 'POST',
-    url: `${serverUrl}/heartbeat_chess`,
-    contentType: 'application/json',
-    data: JSON.stringify({
-      id: peerId,
-      username: socket.username,
-      opponent:
-        socket.opponent === null
-          ? {}
-          : {
-              id: socket.opponent.id,
-              username: socket.opponent.username,
-            },
-    }),
-
-    success: function (data) {
-      socket.peers = data.active_peers;
-
-      $('peers ul').remove();
-      var ul = $('<ul>');
-      var $peers = $('peers'); // Select the div by its id
-
-      for (let peer in socket.peers) {
-        if (peer != socket.peer._id) {
-          if (socket.peers[peer].opponent.username === undefined) {
-            const li = $('<li>').text(`${socket.peers[peer].username}`); // Create a new <li> element with the text
-            li.css({
-              cursor: 'pointer',
-            });
-            ul.append(li); // Append the <li> element to the <ul>
-            $peers.append(ul); // Append the <ul> to the div
-            li.attr('id', peer).click(function () {
-              if (socket.opponent === null && socket.set_username) {
-                socket.opponent = socket.peer.connect(this.id);
-                socket.opponent.id = this.id;
-                socket.color = chance.pickone(['b', 'w']);
-                socket.opponent.color = socket.color == 'b' ? 'w' : 'b';
-                socket.opponent.username = socket.peers[peer].username;
-                socket.opponent.on('open', function () {
-                  socket.opponent.send({
-                    username: socket.username,
-                    id: socket.peer._id,
-                    message: 'hi',
-                    color: socket.color,
-                  });
-                  console.log('send hi');
-                  addMessage(`Send request to ${li.text()}`, 'Admin', {
-                    color: 'green',
-                  });
-                  $('.play').css({ color: 'red', cursor: 'not-allowed' });
-                });
-
-                socket.opponent.on('error', function () {
-                  addMessage(
-                    `Some Error occurred from your ${socket.opponent.username} side`,
-                    'Admin',
-                    {
-                      color: 'red',
-                    },
-                  );
-                });
-
-                socket.opponent.on('close', function () {
-                  addMessage(
-                    `${socket.opponent.username} lost connection or may leave the game. You can save the game for future playing.`,
-                    'Admin',
-                    {
-                      color: 'orange',
-                    },
-                  );
-                  socket.opponent = null;
-                  socket.get_accepted = false;
-                });
-              } else if (socket.set_username) {
-                addMessage(`You are playing`, 'Admin');
-              }
-            });
-          } else {
-            const li = $('<li>').text(
-              `${socket.peers[peer].username} (Playing)`,
-            ); // Create a new <li> element with the text
-            li.css({
-              cursor: 'not-allowed',
-              opacity: '.8',
-            });
-            ul.append(li); // Append the <li> element to the <ul>
-            $peers.append(ul); // Append the <ul> to the div
-          }
-        } else {
-          if (socket.opponent === null) {
-            let div = $('peers peer').html(`. ${socket.peers[peer].username}`); // Create a new <li> element with the text
-            let label = $('<label>').text('♔');
-            div.prepend(label);
-          } else if (socket.color === 'w' && socket.get_accepted) {
-            let label = $("<label dcr='w'>").text('♔');
-            let div = $('peers peer').html(` ${socket.peers[peer].username}`); // Create a new <li> element with the text
-            div.prepend(label);
-          } else if (socket.color === 'b' && socket.get_accepted) {
-            let label = $("<label dcr='b'>").text('♔');
-            let div = $('peers peer').html(` ${socket.peers[peer].username}`); // Create a new <li> element with the text
-            div.prepend(label);
-          }
-        }
-      }
-    },
-    error: function () {
-      console.error('Error sending peer ID.');
-    },
-  });
-}
-
-function addRequest(
-  username,
-  style = {
-    color: 'blue',
+    $('#Resign').prop('disabled', busy && !accepted);
+    updateFindButton();
+    renderPlayers();
   },
-) {
-  console.log('request for paly');
-  const messageBox = $('.chat-messages');
-  const ul = $('.chat-messages ul');
-  const messageElement = $('<li>').html(`
-      <b>${username}: </b>
-      <span>Do you want to play?</span>
-      <button class="btn-yes" name="yes">✓</button>
-      <button class="btn-no" name="no">✕</button>
-    `);
-  messageElement.attr('dcr', 'request');
-  messageElement.find('span').css(style);
-  messageElement.find('.btn-yes').click(accept);
-  messageElement.find('.btn-no').click(deny);
+  onStart() {
+    Reset_Game();
+    addMessage(
+      `Playing ${socket.opponent.username}. You are ${socket.color === 'w' ? 'White' : 'Black'}.`,
+      'Admin',
+    );
+  },
+  onRequest: addRequest,
+  onNotice: (text) => addMessage(text, 'Admin'),
+  onData(data) {
+    if (data.message === 'move') {
+      const move = data.move;
+      if (
+        !move ||
+        typeof move.piece?.src !== 'string' ||
+        typeof move.dst !== 'string' ||
+        !/^[0-7]-[0-7]$/.test(move.piece?.src) ||
+        !/^[0-7]-[0-7]$/.test(move.dst) ||
+        !['move', 'attack', 'ep', 'cs'].includes(move.type)
+      )
+        return;
+      const piece = chess.get(move.piece.src);
+      if (!piece || piece.color !== socket.opponent.color) return;
+      const res = Update_Game({ piece, dst: move.dst, type: move.type }, true);
+      if (res) Select_Square(`#b-${move.dst}`, 'green');
+    } else if (
+      data.message === 'message' &&
+      typeof data.text === 'string' &&
+      data.text.length <= 2000
+    ) {
+      addMessage(data.text, socket.opponent.username);
+    } else if (
+      data.message === 'load_history' &&
+      Array.isArray(data.history) &&
+      data.history.length <= 1000 &&
+      data.history.every(
+        (entry) =>
+          entry?.move &&
+          typeof entry.move.piece?.src === 'string' &&
+          typeof entry.move.dst === 'string' &&
+          /^[0-7]-[0-7]$/.test(entry.move.piece?.src) &&
+          /^[0-7]-[0-7]$/.test(entry.move.dst) &&
+          ['move', 'attack', 'ep', 'cs'].includes(entry.move.type),
+      )
+    ) {
+      socket.history = data.history;
+      addHistory(socket.opponent.username);
+    } else if (data.message === 'deny_history') {
+      addMessage('I want to start fresh...', socket.opponent.username);
+    } else if (data.message === 'accept_history') {
+      load_history(socket.history);
+    } else if (data.message === 'checkmate' && chess.in_checkmate()) {
+      CheckMate(chess.in_check().b ? 'w' : 'b');
+    } else if (data.message === 'resign') {
+      CheckMate(socket.color, 'Resign');
+    } else if (data.message === 'reset') {
+      Reset_Game();
+      addMessage('Started a new game.', 'Admin');
+    }
+  },
+});
 
-  ul.append(messageElement);
-  messageBox.scrollTop(messageBox.prop('scrollHeight'));
+socket.refreshLobby = () => {
+  if (socket.peer.open && socket.set_username)
+    lobby.connect(socket.peer.id, socket.username);
+};
+socket.leave = () => {
+  if (socket.opponent?.open) socket.opponent.send({ message: 'leave' });
+  session.leave();
+};
+socket.peer.on('open', () => {
+  $('peers h4').css({ color: 'green' });
+  socket.refreshLobby();
+});
+socket.peer.on('disconnected', () => {
+  lobby.stop();
+  lobbyConnected = false;
+  queued = false;
+  socket.peers = {};
+  renderPlayers();
+  updateFindButton();
+  $('#lobby-status').text('Reconnecting to online play…');
+  if (!socket.peer.destroyed) socket.peer.reconnect();
+});
+socket.peer.on('error', () => {
+  addMessage(
+    'Online connection failed. Local play is still available.',
+    'Admin',
+    { color: 'red' },
+  );
+});
+socket.peer.on('close', () => {
+  lobby.stop();
+  lobbyConnected = false;
+  queued = false;
+  socket.peers = {};
+  session.leave();
+  $('#lobby-status').text('Online play disconnected.');
+});
+window.addEventListener('pagehide', () => {
+  lobby.stop();
+  socket.leave();
+});
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) socket.refreshLobby();
+});
+
+$('#find-opponent').on('click', () => {
+  if (socket.opponent || session.expected || !socket.set_username) return;
+  lobby.send({ type: queued ? 'cancel' : 'queue' });
+});
+function updateFindButton() {
+  $('#find-opponent')
+    .prop(
+      'disabled',
+      !lobbyConnected ||
+        !socket.set_username ||
+        Boolean(socket.opponent || session.expected),
+    )
+    .text(queued ? 'Cancel search' : 'Find opponent');
+  if (queued) $('#lobby-status').text('Waiting for another player…');
 }
-
-function accept() {
-  console.log('accepted');
-  Reset_Game();
-  if (socket.opponent === null) {
-    socket.opponent = socket.peer.connect(socket.data.id);
-    socket.opponent.color = socket.data.color;
-    socket.color = socket.opponent.color == 'b' ? 'w' : 'b';
-    socket.opponent.id = socket.data.id;
-    socket.opponent.username = socket.data.username;
-
-    socket.opponent.on('open', function () {
-      socket.opponent.send({
-        username: socket.username,
-        id: socket.peer._id,
-        message: 'accepted',
-        color: socket.color,
-      });
+function renderPlayers() {
+  const ul = $('<ul>');
+  for (const peer of Object.values(socket.peers)) {
+    if (peer.id === socket.peer.id) continue;
+    const li = $('<li>');
+    const button = $('<button>', { type: 'button' }).text(
+      `${peer.username}${peer.busy ? ' (Playing)' : ''}`,
+    );
+    button.prop(
+      'disabled',
+      peer.busy ||
+        !socket.set_username ||
+        Boolean(socket.opponent || session.expected) ||
+        queued,
+    );
+    button.on('click', () => {
+      if (
+        session.request(peer.id, peer.username, Math.random() < 0.5 ? 'w' : 'b')
+      ) {
+        $('#lobby-status').text(`Waiting for ${peer.username} to accept…`);
+        addMessage(`Sent a play request to ${peer.username}.`, 'Admin');
+      }
     });
-    $('.play').css({ color: 'red', cursor: 'not-allowed' });
-    socket.get_accepted = true;
+    ul.append(li.append(button));
   }
-  $('[dcr=request]').fadeOut(500, function () {
-    $('[dcr=request]').remove();
-  });
+  $('peers ul').remove();
+  $('peers').append(ul);
+  $('peers peer').text(
+    socket.set_username ? socket.username : 'Choose a nickname to play online.',
+  );
+  if (
+    lobbyConnected &&
+    !Object.values(socket.peers).some((peer) => peer.id !== socket.peer.id)
+  )
+    ul.append(
+      $('<li>').text('No other players yet. Invite someone to open this site.'),
+    );
 }
-
-function deny() {
-  console.log('rejected');
-  let opponent = socket.peer.connect(socket.data.id);
-  opponent.on('open', function () {
-    opponent.send({
-      username: socket.username,
-      id: socket.peer._id,
-      message: 'rejected',
-      color: socket.color,
-    });
-  });
-
-  $('[dcr=request]').fadeOut(500, function () {
-    $('[dcr=request]').remove();
-  });
+function addRequest(username, accept, deny) {
+  const li = $('<li>').attr('dcr', 'request');
+  li.append(
+    $('<b>').text(`${username}: `),
+    $('<span>').text('Would you like to play? '),
+    $('<button>', { type: 'button', class: 'btn-yes' })
+      .text('✓')
+      .on('click', accept),
+    $('<button>', { type: 'button', class: 'btn-no' })
+      .text('✕')
+      .on('click', deny),
+  );
+  $('.chat-messages ul').append(li);
 }
+renderPlayers();
+updateFindButton();
+if (!lobbyUrl) $('#lobby-status').text('Online play is not configured.');
 
 function addHistory(
   username,
@@ -344,10 +269,11 @@ function addHistory(
   const ul = $('.chat-messages ul');
   const messageElement = $('<li>').html(`
       <b>Admin: </b>
-      <span>${username} asks to load a game! </span>
+      <span></span>
       <button class="btn-yes" name="yes">✓</button>
       <button class="btn-no" name="no">✕</button>
     `);
+  messageElement.find('span').text(`${username} asks to load a game!`);
   messageElement.attr('dcr', 'load_history');
   messageElement.find('span').css(style);
   messageElement.find('.btn-yes').click(acceptHistory);

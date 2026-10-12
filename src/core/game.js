@@ -74,18 +74,18 @@ $close.on('click', function closeNav() {
 });
 
 $('.usernameInput').focus();
-const cleanInput = (input) => {
-  return $('<div/>').text(input).html();
-};
 const setUsername = () => {
-  let username = cleanInput($('.usernameInput').val().trim());
+  let username = $('.usernameInput').val().trim();
+  if (!username) return false;
   socket.username = username;
   socket.set_username = true;
+  socket.refreshLobby();
+  return true;
 };
 
 $('.usernameInput').keyup(function (event) {
   if (event.which == 13) {
-    setUsername();
+    if (!setUsername()) return;
     $('.form').fadeOut(1000, function () {
       $('.chat-messages ul').show();
       $('.form').remove();
@@ -110,7 +110,7 @@ function sendMessage() {
   if (socket.set_username) {
     addMessage(messageText, socket.username);
 
-    if (socket.opponent) {
+    if (socket.opponent && socket.get_accepted) {
       socket.opponent.send({
         message: 'message',
         text: messageText,
@@ -143,6 +143,8 @@ emojiPicker.addEventListener('emoji-pick', (event) => {
 });
 
 $('#new_game').click(function () {
+  if (socket.opponent && !socket.get_accepted) return;
+  if (socket.opponent) socket.opponent.send({ message: 'reset' });
   Reset_Game();
   addMessage('Reset The Game...', 'Admin');
 });
@@ -150,14 +152,7 @@ $('#new_game').click(function () {
 $('#leave_game').click(function () {
   if (socket.opponent != null) {
     addMessage(`${socket.username} Leaves The Game.`, 'Admin');
-    socket.opponent.send({
-      username: socket.username,
-      id: socket.peer._id,
-      message: 'leave',
-      color: socket.color,
-    });
-
-    socket.opponent = null;
+    socket.leave();
   }
 });
 

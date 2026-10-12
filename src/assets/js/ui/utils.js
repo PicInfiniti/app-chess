@@ -18,8 +18,9 @@ export function addMessage(
     console.log(`log: ${text}`);
     const messageBox = $('.chat-messages');
     const ul = $('.chat-messages ul');
-    const messageElement = $('<li>').html(
-      `<b>${username}: </b><span>${text}</span>`,
+    const messageElement = $('<li>').append(
+      $('<b>').text(`${username}: `),
+      $('<span>').text(text),
     );
     messageElement.find('span').css(style);
 
@@ -41,7 +42,7 @@ export function CheckMate(color, type = 'CheckMate') {
   if (socket.end_game === false) {
     if (socket.opponent != null) {
       addMessage(
-        `${socket.color == color ? socket.username : socket.opponent.username} 🎊🎊WINS🎉🎉 with a <b>${type}</b> against ${socket.color == color ? socket.opponent.username : socket.username}.`,
+        `${socket.color == color ? socket.username : socket.opponent.username} 🎊🎊WINS🎉🎉 with a ${type} against ${socket.color == color ? socket.opponent.username : socket.username}.`,
         'Admin',
       );
       socket.opponent.send({
@@ -55,7 +56,7 @@ export function CheckMate(color, type = 'CheckMate') {
       socket.color = socket.color == 'b' ? 'w' : 'b';
     } else {
       addMessage(
-        `${color == 'b' ? 'Black' : 'White'} 🎊🎊WINS🎉🎉 with a <b>${type}</b> against ${color == 'w' ? 'Black' : 'White'}.`,
+        `${color == 'b' ? 'Black' : 'White'} 🎊🎊WINS🎉🎉 with a ${type} against ${color == 'w' ? 'Black' : 'White'}.`,
         'Admin',
         {
           color: 'green',
@@ -279,10 +280,11 @@ export function Update_Game(
   history = false,
 ) {
   if (
-    socket.opponent === null ||
-    admin ||
-    socket.color === chess.turn ||
-    history
+    (!socket.opponent || socket.get_accepted || history) &&
+    (socket.opponent === null ||
+      admin ||
+      socket.color === chess.turn ||
+      history)
   ) {
     let res = chess.move(Move);
     turn_update();
@@ -322,7 +324,7 @@ export function Update_Game(
       }
     }
 
-    if (socket.opponent && admin == false && history == false) {
+    if (res && socket.opponent && admin == false && history == false) {
       let lastMove = chess.history[chess.history.length - 1];
       lastMove.message = 'move';
       socket.opponent.send(lastMove);

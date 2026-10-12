@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "chess-lobby",
+  "main": "backend/worker.js",
+  "compatibility_date": "2026-10-11",
+  "workers_dev": true,
+  "vars": {
+    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://chess.picinfiniti.net",
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LOBBY", "class_name": "ChessLobby" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChessLobby"] }],
+}

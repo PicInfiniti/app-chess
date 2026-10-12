@@ -661,7 +661,7 @@ export default class Desk {
 
   reset() {
     this.board = this.board_generator(this.ROW, this.COLUMN);
-    this.board_1D = []; // one dimension board
+    this.board_1D = this.D3_to_1d(); // one dimension board
     this.board_temp;
     this.turn = this.WHITE;
     this.kings = {
