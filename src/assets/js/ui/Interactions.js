@@ -17,7 +17,6 @@ import {
   update_board,
   addMessage,
   turn_update,
-  Move_piece,
 } from './utils.js';
 
 import { chess } from './setup.js';
@@ -74,16 +73,10 @@ $('.undo').click(function () {
   if (chess.count > 0 && socket.opponent == null) {
     socket.playback = socket.playback ? false : true;
     let Move = chess.undo();
-    let d_x = Number(Move.dst[0]);
-    let d_y = Number(Move.dst[2]);
-    turn_update();
-    Move_piece(Move.dst, Move.piece.src, update_board);
-    if (Move.type == 'cs') {
-      Move_piece(
-        `${d_x}-${d_y == 6 ? 5 : 3}`,
-        `${d_x}-${d_y == 6 ? 7 : 0}`,
-        update_board,
-      );
+    if (Move) {
+      update_board();
+      turn_update();
+      socket.end_game = false;
     }
   }
 });
@@ -107,6 +100,7 @@ $('.redo').click(function () {
           piece: piece,
           dst: el.move.dst,
           type: el.move.type,
+          promotion: el.move.promotion,
         },
         false,
         true,
@@ -127,29 +121,21 @@ $('#save').click(function () {
 // read json ----------------------
 
 function onReaderLoad(event) {
-  var obj = JSON.parse(event.target.result);
-  socket.history = obj.move;
-  if (socket.opponent === null) {
-    if (!socket.playback) {
-      PlayBack();
-    }
-    socket.playback = socket.playback ? false : true;
-    socket.click = socket.click ? false : true;
-  } else {
-    socket.opponent.send({
-      username: socket.username,
-      id: socket.peer._id,
-      message: 'load_history',
-      history: socket.history,
-      color: socket.color,
-    });
+  if (socket.opponent || socket.recovery?.active) return;
+  try {
+    const obj = JSON.parse(event.target.result);
+    if (!Array.isArray(obj.move) || obj.move.length > 1024)
+      throw new Error('Invalid history.');
+    load_history(obj.move);
+  } catch {
+    addMessage('Unable to load this game history.', 'Admin', { color: 'red' });
   }
 }
 
 $('#jsonfile').change((event) => {
   var reader = new FileReader();
   reader.onload = onReaderLoad;
-  reader.readAsText(event.target.files[0]);
+  if (event.target.files[0]) reader.readAsText(event.target.files[0]);
 });
 
 // ---------------------------------------
@@ -206,14 +192,6 @@ $('#board label').mousedown(function (event) {
               socket.history = JSON.parse(JSON.stringify(chess.history));
             }
 
-            if (
-              res &&
-              res.piece.name == 'pawn' &&
-              (res.dst[0] == 0 || res.dst[0] == 7)
-            ) {
-              addPromotion('Admin', res);
-            }
-
             socket.click_pos.src = null;
             socket.click_pos.dst = null;
           }
@@ -237,37 +215,8 @@ $('#board label').mousedown(function (event) {
   }
 });
 
-function addPromotion(username, res) {
-  console.log('request for paly');
-  const messageBox = $('.chat-messages');
-  const ul = $('.chat-messages ul');
-  const messageElement = $('<li>').html(`
-      <b>Admin: </b>
-      <span>Which promotion you want?</span>
-      <button class="promotion" name="queen">♛</button>
-      <button class="promotion" name="bishop">♝</button>
-      <button class="promotion" name="knight">♞</button>
-      <button class="promotion" name="rook">♜</button>
-    `);
-  messageElement.attr('dcr', 'promotion');
-  messageElement.find('.promotion').click(acceptPromotion.bind(null, res));
-
-  ul.append(messageElement);
-  messageBox.scrollTop(messageBox.prop('scrollHeight'));
-}
-
-function acceptPromotion(res, e) {
-  console.log(e, res);
-  res.piece.Promotion(e.target.name);
-  update_board();
-
-  $('[dcr=promotion]').fadeOut(500, function () {
-    $('[dcr=promotion]').remove();
-  });
-}
-
 $('#board label').droppable({
-  accept: '#board label span ',
+  accept: '#board label img',
   drop: function (event, ui) {
     socket.click_pos.src = ui.draggable.parent().attr('name');
     socket.click_pos.dst = $(this).attr('name');
@@ -299,14 +248,6 @@ $('#board label').droppable({
                 ui.helper.animate(ui.originalPosition);
               } else {
                 socket.history = JSON.parse(JSON.stringify(chess.history));
-              }
-
-              if (
-                res &&
-                res.piece.name == 'pawn' &&
-                (res.dst[0] == 0 || res.dst[0] == 7)
-              ) {
-                addPromotion('Admin', res);
               }
 
               socket.click_pos.src = null;

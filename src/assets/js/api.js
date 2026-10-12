@@ -103,7 +103,10 @@ const session = new PeerSession(socket.peer, {
         return;
       const piece = chess.get(move.piece.src);
       if (!piece || piece.color !== socket.opponent.color) return;
-      const res = Update_Game({ piece, dst: move.dst, type: move.type }, true);
+      const res = Update_Game(
+        { piece, dst: move.dst, type: move.type, promotion: move.promotion },
+        true,
+      );
       if (res) Select_Square(`#b-${move.dst}`, 'green');
     } else if (
       data.message === 'message' &&

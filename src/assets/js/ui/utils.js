@@ -51,9 +51,6 @@ export function CheckMate(color, type = 'CheckMate') {
         message: type == 'CheckMate' ? 'checkmate' : 'resign',
         color: socket.color,
       });
-
-      socket.opponent.color = socket.opponent.color == 'b' ? 'w' : 'b';
-      socket.color = socket.color == 'b' ? 'w' : 'b';
     } else {
       addMessage(
         `${color == 'b' ? 'Black' : 'White'} 🎊🎊WINS🎉🎉 with a ${type} against ${color == 'w' ? 'Black' : 'White'}.`,
@@ -85,22 +82,24 @@ export function CheckMate(color, type = 'CheckMate') {
 
 export function load_history(history) {
   Reset_Game();
-  var interval = 500;
-  history.forEach(function (el, index) {
-    setTimeout(function () {
-      let piece;
-      piece = chess.get(el.move.piece.src);
-      Update_Game(
+  for (const el of history) {
+    if (
+      !Update_Game(
         {
-          piece: piece,
+          piece: chess.get(el.move.piece.src),
           dst: el.move.dst,
           type: el.move.type,
+          promotion: el.move.promotion,
         },
         false,
         true,
-      );
-    }, index * interval);
-  });
+      )
+    ) {
+      Reset_Game();
+      throw new Error('This history contains an illegal move.');
+    }
+  }
+  socket.history = structuredClone(chess.history);
 }
 
 export function Move(message) {
@@ -286,48 +285,53 @@ export function Update_Game(
       socket.color === chess.turn ||
       history)
   ) {
-    let res = chess.move(Move);
-    turn_update();
-    if (res) {
-      let lastMove = chess.history[chess.history.length - 1];
-      let d_x = Number(lastMove.move.dst[0]);
-      let d_y = Number(lastMove.move.dst[2]);
-
-      switch (Move.type) {
-        case 'ep':
-          Move_piece(lastMove.move.piece.src, lastMove.move.dst, function () {
-            $(
-              `#b-${lastMove.move.piece.color == 'w' ? d_x + 1 : d_x - 1}-${d_y} img`,
-            ).remove();
-          });
-          break;
-
-        case 'cs':
-          Move_piece(lastMove.move.piece.src, lastMove.move.dst);
-          Move_piece(
-            `${d_x}-${d_y == 6 ? 7 : 0}`,
-            `${d_x}-${d_y == 6 ? 5 : 3}`,
-          );
-          break;
-
-        case 'attack':
-          Move_piece(lastMove.move.piece.src, lastMove.move.dst, function () {
-            $(`#b-${d_x}-${d_y} img:first`).remove();
-          });
-
-          break;
-
-        default:
-          Move_piece(lastMove.move.piece.src, lastMove.move.dst);
-
-          break;
+    if (
+      !history &&
+      !admin &&
+      (socket.end_game ||
+        !socket.click ||
+        (socket.recovery && !socket.recovery.canMove()))
+    )
+      return null;
+    const legal = chess.moves(Move.piece).find((m) => m.dst === Move.dst);
+    if (legal?.promotions && !Move.promotion && !admin && !history) {
+      socket.click = false;
+      const li = $('<li>').attr('dcr', 'promotion').text('Promote to: ');
+      for (const [promotion, name] of [
+        ['q', 'Queen'],
+        ['r', 'Rook'],
+        ['b', 'Bishop'],
+        ['n', 'Knight'],
+      ]) {
+        li.append(
+          $('<button>', { type: 'button' })
+            .text(name)
+            .on('click', () => {
+              li.remove();
+              socket.click = true;
+              Update_Game({ ...Move, promotion });
+            }),
+        );
       }
+      $('.chat-messages ul').append(li);
+      return null;
     }
-
-    if (res && socket.opponent && admin == false && history == false) {
-      let lastMove = chess.history[chess.history.length - 1];
-      lastMove.message = 'move';
-      socket.opponent.send(lastMove);
+    const res = chess.move(Move);
+    if (res) {
+      update_board();
+      turn_update();
+      socket.history = structuredClone(chess.history);
+      if (!admin && !history && socket.opponent) {
+        const lastMove = chess.history.at(-1);
+        if (socket.recovery) socket.recovery.propose(chess.checkpoint());
+        else socket.opponent.send({ ...lastMove, message: 'move' });
+      }
+      if (!history && chess.in_checkmate())
+        CheckMate(chess.turn === 'w' ? 'b' : 'w');
+      else if (!history && chess.in_draw()) {
+        socket.end_game = true;
+        addMessage('Game drawn.', 'Admin');
+      }
     }
     return res;
   }
