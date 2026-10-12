@@ -132,3 +132,42 @@ test('pairing completes when the PeerJS offer arrives before the lobby notificat
   assert.equal(f.session.accepted, true);
   assert.equal(bob.sent[0].message, 'accepted');
 });
+
+test('recovery sessions reject unsolicited peers and handshakes from another game', (t) => {
+  const f = fixture(t);
+  f.session.handlers.getGameId = () => 'current-game';
+  const unsolicited = new Connection('bob');
+  f.peer.emit('connection', unsolicited);
+  unsolicited.emit('data', {
+    message: 'hi',
+    username: 'Bob',
+    color: 'w',
+    gameId: 'current-game',
+  });
+  assert.equal(unsolicited.sent[0].message, 'rejected');
+  f.session.expect({
+    opponent: { id: 'bob', username: 'Bob' },
+    color: 'b',
+    initiator: false,
+  });
+  const stale = new Connection('bob');
+  f.peer.emit('connection', stale);
+  stale.emit('data', {
+    message: 'hi',
+    username: 'Bob',
+    color: 'w',
+    gameId: 'old-game',
+  });
+  assert.equal(stale.sent[0].message, 'rejected');
+  assert.equal(f.started, 0);
+  const current = new Connection('bob');
+  f.peer.emit('connection', current);
+  current.emit('data', {
+    message: 'hi',
+    username: 'Bob',
+    color: 'w',
+    gameId: 'current-game',
+  });
+  assert.equal(f.started, 1);
+  assert.equal(current.sent[0].gameId, 'current-game');
+});

@@ -2,13 +2,14 @@ import $ from 'jquery';
 import { Peer } from 'peerjs';
 import { LobbyClient } from './lobby.js';
 import { PeerSession } from './peer-session.js';
+import { RecoveryClient } from './recovery.js';
 import {
-  Update_Game,
   Reset_Game,
-  load_history,
   CheckMate,
-  Select_Square,
   addMessage,
+  update_board,
+  turn_update,
+  Reset_Sections,
 } from './ui/utils.js';
 import { chess } from './ui/setup.js';
 
@@ -28,134 +29,212 @@ export const socket = {
 };
 document.socket = socket;
 document.Reset_Game = Reset_Game;
-let queued = false;
-let lobbyConnected = false;
+let queued = false,
+  lobbyConnected = false,
+  inviting = false,
+  hidden = false;
 const lobbyUrl =
   import.meta.env.VITE_LOBBY_URL ||
   (import.meta.env.DEV ? 'ws://localhost:8787/lobby' : '');
+const notice = (text) => addMessage(text, 'Admin', { color: 'red' });
+const recovery = (socket.recovery = new RecoveryClient(lobbyUrl, {
+  onError: notice,
+  onStatus(status) {
+    $('#lobby-status').text(status);
+    updateFindButton();
+  },
+  onState(state) {
+    chess.restore(state);
+    socket.color = recovery.active?.color;
+    socket.history = structuredClone(chess.history);
+    socket.end_game = false;
+    socket.click = true;
+    socket.click_pos = { src: null, dst: null };
+    socket.playback = false;
+    $('[dcr=promotion]').remove();
+    $('#result').css({ 'z-index': 0, opacity: 0 });
+    Reset_Sections();
+    update_board();
+    turn_update();
+    if (state.result) CheckMate(state.result.winner, 'Resign');
+    else if (chess.in_checkmate()) CheckMate(chess.turn === 'w' ? 'b' : 'w');
+    else if (chess.in_draw()) {
+      socket.end_game = true;
+      addMessage('Game drawn.', 'Admin');
+    }
+  },
+  onPresence() {
+    reconnectOpponent();
+  },
+  peerReady: () => Boolean(socket.get_accepted && socket.opponent?.open),
+  sendPeer: (data) => {
+    if (socket.get_accepted && socket.opponent?.open)
+      socket.opponent.send(data);
+  },
+  onForget(reason) {
+    session.leave();
+    lobby.setBusy(false);
+    socket.color = null;
+    $('#lobby-status').text(
+      lobbyConnected ? 'Connected' : 'Lobby disconnected.',
+    );
+    if (reason) addMessage(reason, 'Admin');
+    updateFindButton();
+    renderPlayers();
+  },
+}));
+if (recovery.active) {
+  socket.username = recovery.active.username;
+  socket.set_username = true;
+  socket.color = recovery.active.color;
+  $('.form').remove();
+  $('.chat-messages ul').show();
+  $('.chat-messages').css({
+    'background-color': 'white',
+    color: 'black',
+    'text-align': 'left',
+    display: 'block',
+  });
+}
 const lobby = new LobbyClient(lobbyUrl, {
   onPlayers(peers) {
     socket.peers = Object.fromEntries(peers.map((peer) => [peer.id, peer]));
     queued = peers.find((peer) => peer.id === socket.peer.id)?.queued || false;
-    if (!queued && lobbyConnected && !session.connection && !session.expected)
+    if (!recovery.active && !queued && !inviting && lobbyConnected)
       $('#lobby-status').text('Connected');
     renderPlayers();
     updateFindButton();
   },
   onStatus(status) {
     lobbyConnected = status === 'Connected';
-    if (!lobbyConnected) queued = false;
-    $('#lobby-status').text(status);
+    if (!lobbyConnected) {
+      queued = false;
+      inviting = false;
+      $('[dcr=request]').remove();
+    }
+    if (!recovery.active) $('#lobby-status').text(status);
     updateFindButton();
   },
   onError(text) {
-    addMessage(text, 'Admin', { color: 'red' });
+    inviting = false;
+    notice(text);
+    updateFindButton();
+  },
+  onChallenge({ opponent }) {
+    if (recovery.active) {
+      lobby.send({ type: 'decline', target: opponent.id });
+      return;
+    }
+    inviting = true;
+    updateFindButton();
+    renderPlayers();
+    addRequest(
+      opponent.username,
+      () => {
+        $('[dcr=request]').remove();
+        lobby.send({ type: 'accept', target: opponent.id });
+      },
+      () => {
+        $('[dcr=request]').remove();
+        inviting = false;
+        lobby.send({ type: 'decline', target: opponent.id });
+        updateFindButton();
+      },
+    );
+  },
+  onInvitationEnded(text) {
+    inviting = false;
+    $('[dcr=request]').remove();
+    addMessage(text, 'Admin');
+    updateFindButton();
+    renderPlayers();
   },
   onMatch(match) {
     queued = false;
-    if (!session.expect(match)) lobby.setBusy(Boolean(socket.opponent));
-    $('#lobby-status').text(`Connecting to ${match.opponent.username}…`);
+    inviting = false;
+    $('[dcr=request]').remove();
+    if (!recovery.start(match, socket.username, socket.peer.id)) {
+      lobby.setBusy(Boolean(recovery.active));
+      return;
+    }
+    session.expect(match);
+    lobby.setBusy(true);
     updateFindButton();
+    renderPlayers();
+    addMessage(
+      `Playing ${match.opponent.username}. You are ${match.color === 'w' ? 'White' : 'Black'}.`,
+      'Admin',
+    );
   },
 });
 
 socket.peer = new Peer();
 const session = new PeerSession(socket.peer, {
   getUsername: () => (socket.set_username ? socket.username : ''),
-  onState(conn, accepted, color) {
+  getGameId: () => recovery.active?.id,
+  onState(conn, accepted) {
     socket.opponent = conn;
     socket.get_accepted = accepted;
-    socket.color = color;
-    queued = false;
-    const busy = Boolean(conn || session.expected);
-    lobby.setBusy(busy);
-    if (accepted) $('#lobby-status').text(`Playing ${conn.username}`);
-    else if (!busy && lobbyConnected) $('#lobby-status').text('Connected');
-    if (!conn || accepted) $('[dcr=request]').remove();
-    $('.play').css({
-      color: busy ? 'red' : '',
-      cursor: busy ? 'not-allowed' : 'pointer',
-    });
-    $('#Resign').prop('disabled', busy && !accepted);
+    socket.color = recovery.active?.color || null;
+    lobby.setBusy(Boolean(recovery.active));
+    recovery.peerChanged();
     updateFindButton();
     renderPlayers();
   },
   onStart() {
-    Reset_Game();
-    addMessage(
-      `Playing ${socket.opponent.username}. You are ${socket.color === 'w' ? 'White' : 'Black'}.`,
-      'Admin',
-    );
+    recovery.peerChanged();
+    recovery.send({ type: 'sync' });
   },
-  onRequest: addRequest,
-  onNotice: (text) => addMessage(text, 'Admin'),
+  onRequest(name, accept, deny) {
+    deny();
+  },
+  onNotice(text) {
+    if (!hidden) addMessage(text, 'Admin');
+  },
   onData(data) {
-    if (data.message === 'move') {
-      const move = data.move;
-      if (
-        !move ||
-        typeof move.piece?.src !== 'string' ||
-        typeof move.dst !== 'string' ||
-        !/^[0-7]-[0-7]$/.test(move.piece?.src) ||
-        !/^[0-7]-[0-7]$/.test(move.dst) ||
-        !['move', 'attack', 'ep', 'cs'].includes(move.type)
-      )
-        return;
-      const piece = chess.get(move.piece.src);
-      if (!piece || piece.color !== socket.opponent.color) return;
-      const res = Update_Game(
-        { piece, dst: move.dst, type: move.type, promotion: move.promotion },
-        true,
-      );
-      if (res) Select_Square(`#b-${move.dst}`, 'green');
-    } else if (
+    if (data.message === 'checkpoint') recovery.receive(data);
+    else if (
       data.message === 'message' &&
       typeof data.text === 'string' &&
       data.text.length <= 2000
-    ) {
+    )
       addMessage(data.text, socket.opponent.username);
-    } else if (
-      data.message === 'load_history' &&
-      Array.isArray(data.history) &&
-      data.history.length <= 1000 &&
-      data.history.every(
-        (entry) =>
-          entry?.move &&
-          typeof entry.move.piece?.src === 'string' &&
-          typeof entry.move.dst === 'string' &&
-          /^[0-7]-[0-7]$/.test(entry.move.piece?.src) &&
-          /^[0-7]-[0-7]$/.test(entry.move.dst) &&
-          ['move', 'attack', 'ep', 'cs'].includes(entry.move.type),
-      )
-    ) {
-      socket.history = data.history;
-      addHistory(socket.opponent.username);
-    } else if (data.message === 'deny_history') {
-      addMessage('I want to start fresh...', socket.opponent.username);
-    } else if (data.message === 'accept_history') {
-      load_history(socket.history);
-    } else if (data.message === 'checkmate' && chess.in_checkmate()) {
-      CheckMate(chess.in_check().b ? 'w' : 'b');
-    } else if (data.message === 'resign') {
-      CheckMate(socket.color, 'Resign');
-    } else if (data.message === 'reset') {
-      Reset_Game();
-      addMessage('Started a new game.', 'Admin');
-    }
   },
 });
 
+function reconnectOpponent() {
+  if (hidden || !recovery.active || !socket.peer.open || !recovery.connected)
+    return;
+  const color = recovery.active.color;
+  const opponent = recovery.peers[color === 'w' ? 'b' : 'w'];
+  if (!opponent) {
+    if (session.connection || session.expected) session.leave();
+    return;
+  }
+  if (
+    session.connection?.peer === opponent.id ||
+    session.expected?.opponent.id === opponent.id
+  )
+    return;
+  if (session.connection || session.expected) session.leave();
+  session.expect({ opponent, color, initiator: color === 'w' });
+}
+const reconnectTimer = setInterval(reconnectOpponent, 3000);
 socket.refreshLobby = () => {
-  if (socket.peer.open && socket.set_username)
+  if (socket.peer.open && socket.set_username) {
+    lobby.setBusy(Boolean(recovery.active));
     lobby.connect(socket.peer.id, socket.username);
+  }
 };
 socket.leave = () => {
   if (socket.opponent?.open) socket.opponent.send({ message: 'leave' });
-  session.leave();
+  if (recovery.active) recovery.forget('Left the online game.');
+  else session.leave();
 };
 socket.peer.on('open', () => {
-  $('peers h4').css({ color: 'green' });
+  if (hidden) return;
   socket.refreshLobby();
+  if (recovery.active) recovery.connect(socket.peer.id);
 });
 socket.peer.on('disconnected', () => {
   lobby.stop();
@@ -164,34 +243,38 @@ socket.peer.on('disconnected', () => {
   socket.peers = {};
   renderPlayers();
   updateFindButton();
-  $('#lobby-status').text('Reconnecting to online play…');
-  if (!socket.peer.destroyed) socket.peer.reconnect();
+  if (!socket.peer.destroyed && !hidden) socket.peer.reconnect();
 });
 socket.peer.on('error', () => {
-  addMessage(
-    'Online connection failed. Local play is still available.',
-    'Admin',
-    { color: 'red' },
-  );
+  if (recovery.active)
+    notice(
+      'Opponent connection failed. Your saved game is retained; reconnection will retry.',
+    );
+  else notice('Online connection failed. Local play is still available.');
 });
 socket.peer.on('close', () => {
   lobby.stop();
   lobbyConnected = false;
-  queued = false;
   socket.peers = {};
   session.leave();
-  $('#lobby-status').text('Online play disconnected.');
+  if (!recovery.active) $('#lobby-status').text('Online play disconnected.');
 });
 window.addEventListener('pagehide', () => {
+  hidden = true;
   lobby.stop();
-  socket.leave();
+  recovery.pause();
+  session.leave();
 });
 window.addEventListener('pageshow', (event) => {
-  if (event.persisted) socket.refreshLobby();
+  if (!event.persisted) return;
+  hidden = false;
+  socket.refreshLobby();
+  if (recovery.active && socket.peer.open) recovery.connect(socket.peer.id);
 });
+window.addEventListener('unload', () => clearInterval(reconnectTimer));
 
 $('#find-opponent').on('click', () => {
-  if (socket.opponent || session.expected || !socket.set_username) return;
+  if (recovery.active || inviting || !socket.set_username) return;
   lobby.send({ type: queued ? 'cancel' : 'queue' });
 });
 function updateFindButton() {
@@ -200,16 +283,24 @@ function updateFindButton() {
       'disabled',
       !lobbyConnected ||
         !socket.set_username ||
-        Boolean(socket.opponent || session.expected),
+        Boolean(recovery.active) ||
+        inviting,
     )
     .text(queued ? 'Cancel search' : 'Find opponent');
-  if (queued) $('#lobby-status').text('Waiting for another player…');
+  $('#Resign').prop(
+    'disabled',
+    Boolean(recovery.active) && (!recovery.canMove() || socket.end_game),
+  );
+  $('#jsonfile, #load, #playGame, .undo, .redo, .play')
+    .prop('disabled', Boolean(recovery.active))
+    .attr('aria-disabled', String(Boolean(recovery.active)));
+  if (queued && !recovery.active)
+    $('#lobby-status').text('Waiting for another player…');
 }
 function renderPlayers() {
   const ul = $('<ul>');
   for (const peer of Object.values(socket.peers)) {
     if (peer.id === socket.peer.id) continue;
-    const li = $('<li>');
     const button = $('<button>', { type: 'button' }).text(
       `${peer.username}${peer.busy ? ' (Playing)' : ''}`,
     );
@@ -217,18 +308,20 @@ function renderPlayers() {
       'disabled',
       peer.busy ||
         !socket.set_username ||
-        Boolean(socket.opponent || session.expected) ||
-        queued,
+        Boolean(recovery.active) ||
+        queued ||
+        inviting,
     );
     button.on('click', () => {
-      if (
-        session.request(peer.id, peer.username, Math.random() < 0.5 ? 'w' : 'b')
-      ) {
+      if (lobby.send({ type: 'challenge', target: peer.id })) {
+        inviting = true;
+        updateFindButton();
+        renderPlayers();
         $('#lobby-status').text(`Waiting for ${peer.username} to accept…`);
         addMessage(`Sent a play request to ${peer.username}.`, 'Admin');
       }
     });
-    ul.append(li.append(button));
+    ul.append($('<li>').append(button));
   }
   $('peers ul').remove();
   $('peers').append(ul);
@@ -248,71 +341,11 @@ function addRequest(username, accept, deny) {
   li.append(
     $('<b>').text(`${username}: `),
     $('<span>').text('Would you like to play? '),
-    $('<button>', { type: 'button', class: 'btn-yes' })
-      .text('✓')
-      .on('click', accept),
-    $('<button>', { type: 'button', class: 'btn-no' })
-      .text('✕')
-      .on('click', deny),
+    $('<button>', { type: 'button' }).text('✓').on('click', accept),
+    $('<button>', { type: 'button' }).text('✕').on('click', deny),
   );
   $('.chat-messages ul').append(li);
 }
 renderPlayers();
 updateFindButton();
 if (!lobbyUrl) $('#lobby-status').text('Online play is not configured.');
-
-function addHistory(
-  username,
-  style = {
-    color: 'blue',
-  },
-) {
-  console.log('request for paly');
-  const messageBox = $('.chat-messages');
-  const ul = $('.chat-messages ul');
-  const messageElement = $('<li>').html(`
-      <b>Admin: </b>
-      <span></span>
-      <button class="btn-yes" name="yes">✓</button>
-      <button class="btn-no" name="no">✕</button>
-    `);
-  messageElement.find('span').text(`${username} asks to load a game!`);
-  messageElement.attr('dcr', 'load_history');
-  messageElement.find('span').css(style);
-  messageElement.find('.btn-yes').click(acceptHistory);
-  messageElement.find('.btn-no').click(denyHistory);
-
-  ul.append(messageElement);
-  messageBox.scrollTop(messageBox.prop('scrollHeight'));
-}
-
-function acceptHistory() {
-  console.log('acceptHistory');
-  load_history(socket.history);
-
-  socket.opponent.send({
-    username: socket.username,
-    id: socket.peer._id,
-    message: 'accept_history',
-    color: socket.color,
-  });
-
-  $('[dcr=load_history]').fadeOut(500, function () {
-    $('[dcr=load_history]').remove();
-  });
-}
-
-function denyHistory() {
-  console.log('denyHistory');
-
-  socket.opponent.send({
-    username: socket.username,
-    id: socket.peer._id,
-    message: 'deny_history',
-    color: socket.color,
-  });
-
-  $('[dcr=load_history]').fadeOut(500, function () {
-    $('[dcr=load_history]').remove();
-  });
-}

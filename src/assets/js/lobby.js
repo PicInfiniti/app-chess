@@ -1,11 +1,18 @@
 export class LobbyClient {
   constructor(
     url,
-    { onPlayers, onMatch, onStatus, onError },
+    { onPlayers, onMatch, onStatus, onError, onChallenge, onInvitationEnded },
     WebSocketClass = WebSocket,
   ) {
     this.url = url;
-    this.handlers = { onPlayers, onMatch, onStatus, onError };
+    this.handlers = {
+      onPlayers,
+      onMatch,
+      onStatus,
+      onError,
+      onChallenge,
+      onInvitationEnded,
+    };
     this.WebSocketClass = WebSocketClass;
     this.player = null;
     this.busy = false;
@@ -62,6 +69,9 @@ export class LobbyClient {
       if (data.type === 'players' && Array.isArray(data.peers))
         this.handlers.onPlayers(data.peers);
       else if (data.type === 'matched') this.handlers.onMatch(data);
+      else if (data.type === 'challenge') this.handlers.onChallenge?.(data);
+      else if (data.type === 'invitation-ended')
+        this.handlers.onInvitationEnded?.(data.text);
       else if (data.type === 'error') this.handlers.onError(data.text);
     };
     ws.onclose = () => {

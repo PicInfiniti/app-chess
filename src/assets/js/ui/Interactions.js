@@ -28,6 +28,10 @@ $('#result').click(function () {
 });
 
 $('#Resign').click(function () {
+  if (socket.recovery?.active) {
+    socket.recovery.resign();
+    return;
+  }
   Reset_Sections();
   if (chess.in_check()['b'] || chess.in_check()['w']) {
     Check(chess.in_check()['b'] ? 'b' : 'w');
@@ -53,13 +57,15 @@ $('#Resign').click(function () {
 });
 
 $('#playGame').click(function () {
+  if (socket.recovery?.active) return;
   load_history(chess.history);
 });
 
 $('.play').click(function () {
   if (
     chess.history.length < socket.history.length &&
-    socket.opponent === null
+    socket.opponent === null &&
+    !socket.recovery?.active
   ) {
     if (!socket.playback) {
       PlayBack();
@@ -70,13 +76,15 @@ $('.play').click(function () {
 });
 
 $('.undo').click(function () {
-  if (chess.count > 0 && socket.opponent == null) {
-    socket.playback = socket.playback ? false : true;
+  if (chess.count > 0 && socket.opponent == null && !socket.recovery?.active) {
+    socket.playback = false;
+    socket.click = true;
     let Move = chess.undo();
     if (Move) {
       update_board();
       turn_update();
       socket.end_game = false;
+      $('#result').css({ 'z-index': 0, opacity: 0 });
     }
   }
 });
@@ -91,7 +99,11 @@ function PlayBack() {
 }
 
 $('.redo').click(function () {
-  if (chess.history.length < socket.history.length && socket.opponent == null) {
+  if (
+    chess.history.length < socket.history.length &&
+    socket.opponent == null &&
+    !socket.recovery?.active
+  ) {
     let el = socket.history[chess.count];
     if (el) {
       let piece = chess.get(el.move.piece.src);

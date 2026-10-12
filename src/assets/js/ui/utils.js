@@ -40,7 +40,7 @@ export function Check(color) {
 
 export function CheckMate(color, type = 'CheckMate') {
   if (socket.end_game === false) {
-    if (socket.opponent != null) {
+    if (socket.opponent != null && !socket.recovery?.active) {
       addMessage(
         `${socket.color == color ? socket.username : socket.opponent.username} 🎊🎊WINS🎉🎉 with a ${type} against ${socket.color == color ? socket.opponent.username : socket.username}.`,
         'Admin',
@@ -290,7 +290,7 @@ export function Update_Game(
       !admin &&
       (socket.end_game ||
         !socket.click ||
-        (socket.recovery && !socket.recovery.canMove()))
+        (socket.recovery?.active && !socket.recovery.canMove()))
     )
       return null;
     const legal = chess.moves(Move.piece).find((m) => m.dst === Move.dst);
@@ -320,10 +320,11 @@ export function Update_Game(
     if (res) {
       update_board();
       turn_update();
-      socket.history = structuredClone(chess.history);
+      if (!history) socket.history = structuredClone(chess.history);
       if (!admin && !history && socket.opponent) {
         const lastMove = chess.history.at(-1);
-        if (socket.recovery) socket.recovery.propose(chess.checkpoint());
+        if (socket.recovery?.active)
+          socket.recovery.propose(chess.checkpoint());
         else socket.opponent.send({ ...lastMove, message: 'move' });
       }
       if (!history && chess.in_checkmate())

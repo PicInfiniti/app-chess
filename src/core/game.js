@@ -76,7 +76,7 @@ $close.on('click', function closeNav() {
 $('.usernameInput').focus();
 const setUsername = () => {
   let username = $('.usernameInput').val().trim();
-  if (!username) return false;
+  if (!username || username.length > 32) return false;
   socket.username = username;
   socket.set_username = true;
   socket.refreshLobby();
@@ -143,14 +143,13 @@ emojiPicker.addEventListener('emoji-pick', (event) => {
 });
 
 $('#new_game').click(function () {
-  if (socket.opponent && !socket.get_accepted) return;
-  if (socket.opponent) socket.opponent.send({ message: 'reset' });
+  if (socket.recovery?.active) socket.leave();
   Reset_Game();
   addMessage('Reset The Game...', 'Admin');
 });
 
 $('#leave_game').click(function () {
-  if (socket.opponent != null) {
+  if (socket.opponent != null || socket.recovery?.active) {
     addMessage(`${socket.username} Leaves The Game.`, 'Admin');
     socket.leave();
   }

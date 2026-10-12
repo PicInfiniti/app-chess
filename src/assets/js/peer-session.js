@@ -60,6 +60,9 @@ export class PeerSession {
         message: 'hi',
         username: this.handlers.getUsername(),
         color,
+        ...(this.handlers.getGameId
+          ? { gameId: this.handlers.getGameId() }
+          : {}),
       });
     });
     return true;
@@ -73,6 +76,8 @@ export class PeerSession {
         if (this.connection === conn) return;
         if (
           this.connection ||
+          (this.handlers.getGameId &&
+            (!this.expected || data.gameId !== this.handlers.getGameId())) ||
           !this.handlers.getUsername() ||
           (this.expected && this.expected.opponent.id !== conn.peer) ||
           (this.expected && this.expected.color === data.color) ||
@@ -99,7 +104,12 @@ export class PeerSession {
         );
         const accept = () => {
           if (this.connection !== conn || this.accepted) return;
-          conn.send({ message: 'accepted' });
+          conn.send({
+            message: 'accepted',
+            ...(this.handlers.getGameId
+              ? { gameId: this.handlers.getGameId() }
+              : {}),
+          });
           this.begin(conn);
         };
         const deny = () => {
@@ -113,7 +123,12 @@ export class PeerSession {
         return;
       }
       if (this.connection !== conn) return;
-      if (data.message === 'accepted' && conn.outgoing && !this.accepted)
+      if (
+        data.message === 'accepted' &&
+        conn.outgoing &&
+        !this.accepted &&
+        (!this.handlers.getGameId || data.gameId === this.handlers.getGameId())
+      )
         this.begin(conn);
       else if (data.message === 'rejected' && !this.accepted)
         this.leave('Play request declined.');

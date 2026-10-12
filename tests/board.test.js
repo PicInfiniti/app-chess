@@ -70,3 +70,28 @@ test('compact recovery replays en passant, castling rights, and every move', () 
   assert.throws(() => recovered.restore({ moves: ['e2e5'], fen: saved.fen }));
   assert.deepEqual(recovered.checkpoint(), saved);
 });
+
+test('promotion choices survive compact replay from the starting position', () => {
+  const desk = new Desk();
+  for (const uci of [
+    'a2a4',
+    'h7h5',
+    'a4a5',
+    'h5h4',
+    'a5a6',
+    'h4h3',
+    'a6b7',
+    'h3g2',
+    'b7a8n',
+  ]) {
+    const src = `${8 - Number(uci[1])}-${'abcdefgh'.indexOf(uci[0])}`;
+    const dst = `${8 - Number(uci[3])}-${'abcdefgh'.indexOf(uci[2])}`;
+    assert.ok(move(desk, src, dst, uci[4]));
+  }
+  const restored = new Desk();
+  restored.restore(desk.checkpoint());
+  assert.equal(restored.get('0-0').name, 'knight');
+  assert.equal(restored.history.at(-1).move.promotion, 'n');
+  restored.undo();
+  assert.equal(restored.get('1-1').name, 'pawn');
+});
