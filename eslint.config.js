@@ -13,7 +13,7 @@ export default defineConfig([
     languageOptions: { globals: globals.browser },
   },
   {
-    files: ['backend/**/*.js'],
+    files: ['backend/**/*.js', 'shared/**/*.js'],
     languageOptions: {
       globals: { ...globals.worker, WebSocketPair: 'readonly' },
     },

@@ -13,9 +13,10 @@ export function validPlayer(id, username) {
 
 // All presence is held in hibernating WebSocket attachments, not process memory.
 export class Lobby {
-  constructor(ctx, now = Date.now) {
+  constructor(ctx, now = Date.now, createMatch = null) {
     this.ctx = ctx;
     this.now = now;
+    this.createMatch = createMatch;
   }
 
   players() {
@@ -79,17 +80,92 @@ export class Lobby {
       this.send(ws, { type: 'pong' });
       return;
     }
-    if (message.type === 'queue' && this.now() - player.lastAction < 500) {
+    if (
+      ['queue', 'challenge'].includes(message.type) &&
+      this.now() - player.lastAction < 500
+    ) {
       this.send(ws, {
         type: 'error',
         text: 'Please wait before trying again.',
       });
       return;
     }
+    if (message.type === 'challenge') {
+      const target = this.players().find(
+        (p) => p.deserializeAttachment().id === message.target,
+      );
+      const other = target?.deserializeAttachment();
+      if (
+        !other ||
+        target === ws ||
+        player.busy ||
+        other.busy ||
+        player.challenge ||
+        other.challenge
+      ) {
+        this.send(ws, { type: 'error', text: 'This player is unavailable.' });
+        return;
+      }
+      player.queued = false;
+      other.queued = false;
+      player.lastAction = this.now();
+      player.challenge = {
+        target: other.id,
+        outgoing: true,
+        expiresAt: this.now() + 30_000,
+      };
+      other.challenge = {
+        target: player.id,
+        outgoing: false,
+        expiresAt: player.challenge.expiresAt,
+      };
+      ws.serializeAttachment(player);
+      target.serializeAttachment(other);
+      this.send(target, {
+        type: 'challenge',
+        opponent: { id: player.id, username: player.username },
+      });
+      this.broadcast();
+      await this.schedule();
+      return;
+    }
+    if (message.type === 'accept' || message.type === 'decline') {
+      const invite = player.challenge;
+      const target = this.players().find(
+        (p) => p.deserializeAttachment().id === message.target,
+      );
+      const other = target?.deserializeAttachment();
+      if (
+        !invite ||
+        invite.outgoing ||
+        invite.target !== message.target ||
+        !other?.challenge?.outgoing ||
+        other.challenge.target !== player.id ||
+        invite.expiresAt <= this.now() ||
+        player.busy ||
+        other.busy
+      ) {
+        this.send(ws, { type: 'error', text: 'This invitation has expired.' });
+        return;
+      }
+      delete player.challenge;
+      delete other.challenge;
+      ws.serializeAttachment(player);
+      target.serializeAttachment(other);
+      if (message.type === 'accept') await this.pair(target, ws);
+      else
+        this.send(target, {
+          type: 'invitation-ended',
+          text: 'Play request declined.',
+        });
+      this.broadcast();
+      await this.schedule();
+      return;
+    }
     if (message.type === 'status' && typeof message.busy === 'boolean') {
       player.busy = message.busy;
       player.queued = false;
-    } else if (message.type === 'queue' && !player.busy) {
+    } else if (message.type === 'queue' && !player.busy && !player.challenge) {
       player.lastAction = this.now();
       player.queued = true;
     } else if (message.type === 'cancel') {
@@ -99,45 +175,82 @@ export class Lobby {
       return;
     }
     ws.serializeAttachment(player);
-    this.match();
+    await this.match();
     this.broadcast();
     await this.schedule();
   }
 
-  match() {
+  async match() {
     const waiting = this.players().filter((ws) => {
       const player = ws.deserializeAttachment();
-      return player.queued && !player.busy;
+      return player.queued && !player.busy && !player.challenge;
     });
-    while (waiting.length >= 2) {
-      const a = waiting.shift();
-      const b = waiting.shift();
-      const first = a.deserializeAttachment();
-      const second = b.deserializeAttachment();
-      for (const [ws, player] of [
-        [a, first],
-        [b, second],
-      ]) {
-        player.busy = true;
-        player.queued = false;
+    while (waiting.length >= 2)
+      await this.pair(waiting.shift(), waiting.shift());
+  }
+
+  async pair(a, b) {
+    const first = a.deserializeAttachment(),
+      second = b.deserializeAttachment();
+    for (const [ws, player] of [
+      [a, first],
+      [b, second],
+    ]) {
+      player.busy = true;
+      player.queued = false;
+      delete player.challenge;
+      ws.serializeAttachment(player);
+    }
+    let game;
+    try {
+      game = this.createMatch
+        ? await this.createMatch({ w: first.username, b: second.username })
+        : null;
+    } catch {
+      for (const ws of [a, b]) {
+        const player = ws.deserializeAttachment();
+        player.busy = false;
         ws.serializeAttachment(player);
+        this.send(ws, {
+          type: 'error',
+          text: 'Could not create a game. Please try again.',
+        });
       }
-      this.send(b, {
+      return;
+    }
+    for (const [ws, color, opponent] of [
+      [b, 'b', first],
+      [a, 'w', second],
+    ])
+      this.send(ws, {
         type: 'matched',
-        opponent: { id: first.id, username: first.username },
-        color: 'b',
-        initiator: false,
+        opponent: { id: opponent.id, username: opponent.username },
+        color,
+        initiator: color === 'w',
+        ...(game ? { game: { id: game.id, token: game.tokens[color] } } : {}),
       });
-      this.send(a, {
-        type: 'matched',
-        opponent: { id: second.id, username: second.username },
-        color: 'w',
-        initiator: true,
-      });
+  }
+
+  clearInvitation(ws, text = 'Play request expired.') {
+    const player = ws.deserializeAttachment();
+    if (!player?.challenge) return;
+    const targetId = player.challenge.target;
+    delete player.challenge;
+    ws.serializeAttachment(player);
+    this.send(ws, { type: 'invitation-ended', text });
+    const target = this.players().find(
+      (p) => p.deserializeAttachment().id === targetId,
+    );
+    const other = target?.deserializeAttachment();
+    if (other?.challenge?.target === player.id) {
+      delete other.challenge;
+      target.serializeAttachment(other);
+      this.send(target, { type: 'invitation-ended', text });
     }
   }
 
   remove(ws) {
+    this.clearInvitation(ws);
     ws.serializeAttachment(null);
     try {
       ws.close(1000, 'Left the lobby');
@@ -154,6 +267,8 @@ export class Lobby {
 
   async alarm() {
     for (const ws of this.players()) {
+      if (ws.deserializeAttachment().challenge?.expiresAt <= this.now())
+        this.clearInvitation(ws);
       if (this.now() - ws.deserializeAttachment().lastSeen >= STALE_AFTER)
         this.remove(ws);
     }
@@ -165,8 +280,14 @@ export class Lobby {
     const players = this.players();
     if (!players.length) return this.ctx.storage.deleteAlarm();
     const earliest = Math.min(
-      ...players.map((ws) => ws.deserializeAttachment().lastSeen),
+      ...players.map((ws) => {
+        const p = ws.deserializeAttachment();
+        return Math.min(
+          p.lastSeen + STALE_AFTER,
+          p.challenge?.expiresAt ?? Infinity,
+        );
+      }),
     );
-    await this.ctx.storage.setAlarm(earliest + STALE_AFTER);
+    await this.ctx.storage.setAlarm(earliest);
   }
 }

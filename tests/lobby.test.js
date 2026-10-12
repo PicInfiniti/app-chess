@@ -156,3 +156,46 @@ test('the lobby limits concurrent players', async () => {
   for (let i = 0; i < 100; i++) await f.join(`player-${i}`);
   await assert.rejects(f.join('overflow'), /full/);
 });
+
+test('manual invitations require acceptance and issue only each player’s own token', async () => {
+  const f = fixture();
+  f.lobby.createMatch = async () => ({
+    id: 'game-id',
+    tokens: { w: 'white-secret', b: 'black-secret' },
+  });
+  const a = await f.join('alice'),
+    b = await f.join('bob'),
+    c = await f.join('charlie');
+  await action(f.lobby, a, { type: 'challenge', target: 'bob' });
+  assert.equal(b.messages.at(-2).type, 'challenge');
+  assert.equal(
+    a.messages.some((m) => m.type === 'matched'),
+    false,
+  );
+  await action(f.lobby, c, { type: 'accept', target: 'alice' });
+  assert.equal(c.messages.at(-1).type, 'error');
+  await action(f.lobby, b, { type: 'accept', target: 'alice' });
+  assert.equal(
+    a.messages.find((m) => m.type === 'matched').game.token,
+    'white-secret',
+  );
+  assert.equal(
+    b.messages.find((m) => m.type === 'matched').game.token,
+    'black-secret',
+  );
+  assert.equal(JSON.stringify(c.messages).includes('secret'), false);
+});
+
+test('abandoned invitations expire and unblock both players', async () => {
+  const f = fixture(),
+    a = await f.join('alice'),
+    b = await f.join('bob');
+  await action(f.lobby, a, { type: 'challenge', target: 'bob' });
+  f.advance(30_000);
+  await f.lobby.alarm();
+  assert.equal(a.data.challenge, undefined);
+  assert.equal(b.data.challenge, undefined);
+  await action(f.lobby, a, { type: 'queue' });
+  await action(f.lobby, b, { type: 'queue' });
+  assert.equal(a.messages.filter((m) => m.type === 'matched').length, 1);
+});
